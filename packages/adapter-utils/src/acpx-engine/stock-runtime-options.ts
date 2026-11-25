@@ -96,6 +96,29 @@ export function splitWindowsAgentCommand(value: string): string[] {
 }
 
 /**
+ * Resolve the Windows argv for an agent launch.
+ *
+ * `splitWindowsAgentCommand` parses a command *line*, where whitespace
+ * separates argv entries unless it is quoted. An already-resolved binary path
+ * is not a command line: on Windows it routinely contains spaces, as in
+ * `C:\Users\First Last\...\node_modules\.bin\codex-acp.cmd`. Parsing such a
+ * path splits it at the space, and the launch then fails with the first
+ * fragment reported as the executable. Pass a resolved path through as a
+ * single argv entry and parse only genuine command lines.
+ */
+export function resolveWindowsAgentArgv(input: {
+  command: string;
+  resolvedPath: boolean;
+}): string[] {
+  if (input.resolvedPath) {
+    const command = input.command.trim();
+    if (!command) throw new Error("Invalid agent command: empty command");
+    return [command];
+  }
+  return splitWindowsAgentCommand(input.command);
+}
+
+/**
  * ACPX reads `ACPX_AUTH_*` credentials from this process's environment for
  * agent authentication. In the shared server those would be host credentials
  * applied to every agent, so refuse to start rather than use them.

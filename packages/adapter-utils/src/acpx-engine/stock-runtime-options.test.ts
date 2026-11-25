@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-import { assertNoHostAcpxAuthEnvironment, splitWindowsAgentCommand, stockAcpRuntimeOptions } from "./stock-runtime-options.js";
+import { assertNoHostAcpxAuthEnvironment, resolveWindowsAgentArgv, splitWindowsAgentCommand, stockAcpRuntimeOptions } from "./stock-runtime-options.js";
 import { typedTerminalSessionFailure, typedTerminalTurnResult } from "./terminal-session-failure.js";
 
 function fakeChild(pid: number): ChildProcess {
@@ -71,6 +71,20 @@ describe("Windows agent command split", () => {
   it("keeps backslashes and groups quoted words", () => {
     expect(splitWindowsAgentCommand('"C:\\Program Files\\nodejs\\node.exe" C:\\agents\\acp.js --flag \'a b\''))
       .toEqual(["C:\\Program Files\\nodejs\\node.exe", "C:\\agents\\acp.js", "--flag", "a b"]);
+  });
+
+  it("keeps an already-resolved binary path intact when the path contains spaces", () => {
+    // A resolved absolute path is not a command line. Parsing it split
+    // "C:\Users\ELITEBOOK 1040-G8\..." at the space and tried to launch
+    // "C:\Users\ELITEBOOK" as the executable.
+    const resolved = "C:\Users\First Last\repo\packages\adapters\codex-local\node_modules\.bin\codex-acp.cmd";
+    expect(resolveWindowsAgentArgv({ command: resolved, resolvedPath: true })).toEqual([resolved]);
+  });
+
+  it("still parses a configured command line into argv", () => {
+    expect(resolveWindowsAgentArgv({ command: "gemini --acp", resolvedPath: false })).toEqual(["gemini", "--acp"]);
+    expect(resolveWindowsAgentArgv({ command: '"C:\Program Files\nodejs\node.exe" acp.js', resolvedPath: false }))
+      .toEqual(["C:\Program Files\nodejs\node.exe", "acp.js"]);
   });
 
   it("rejects an unterminated quote or an empty command", () => {

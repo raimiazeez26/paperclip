@@ -60,7 +60,7 @@ import {
   type AcpxTerminalSessionFailure,
   type AcpxTerminalSessionFailureDiagnostic,
 } from "./terminal-session-failure.js";
-import { assertNoHostAcpxAuthEnvironment, splitWindowsAgentCommand, stockAcpRuntimeOptions, type AcpxAgentSpawnHooks } from "./stock-runtime-options.js";
+import { assertNoHostAcpxAuthEnvironment, resolveWindowsAgentArgv, stockAcpRuntimeOptions, type AcpxAgentSpawnHooks } from "./stock-runtime-options.js";
 export type { AcpxTerminalSessionFailure } from "./terminal-session-failure.js";
 import type { WorkspaceRestoreFailureCode, WorkspaceRestoreOutcome } from "../workspace-restore-merge.js";
 import type { WorkspaceRestoreDiagnostic } from "../workspace-restore-diagnostics.js";
@@ -883,6 +883,12 @@ export async function findAncestorBin(startDir: string, binName: string): Promis
 interface BuiltInAgentCommand {
   command: string;
   shellCommand: string;
+  /**
+   * True when `command` is an absolute filesystem path rather than a command
+   * line. Such a path must never be parsed as argv: on Windows it commonly
+   * contains spaces and parsing would split it mid-path.
+   */
+  resolvedPath: boolean;
 }
 
 async function resolveBuiltInAgentCommand(input: {
@@ -892,20 +898,21 @@ async function resolveBuiltInAgentCommand(input: {
 }): Promise<BuiltInAgentCommand | null> {
   const { agent, packageRootDir, executionTargetIsRemote } = input;
   if (agent === "gemini") {
-    return { command: "gemini --acp", shellCommand: "gemini --acp" };
+    return { command: "gemini --acp", shellCommand: "gemini --acp", resolvedPath: false };
   }
   if (agent === "kimi") {
     // Kimi Code exposes its ACP server via the `kimi acp` subcommand (stdio),
     // rather than a flag (gemini) or a dedicated bin (claude/codex).
-    return { command: "kimi acp", shellCommand: "kimi acp" };
+    return { command: "kimi acp", shellCommand: "kimi acp", resolvedPath: false };
   }
   const binName = agent === "claude" ? "claude-agent-acp" : agent === "codex" ? "codex-acp" : null;
   if (!binName) return null;
   if (executionTargetIsRemote) {
-    return { command: binName, shellCommand: binName };
+    return { command: binName, shellCommand: binName, resolvedPath: false };
   }
-  const resolved = (await findAncestorBin(packageRootDir, binName)) ?? binName;
-  return { command: resolved, shellCommand: shellQuote(resolved) };
+  const found = await findAncestorBin(packageRootDir, binName);
+  const resolved = found ?? binName;
+  return { command: resolved, shellCommand: shellQuote(resolved), resolvedPath: found !== null };
 }
 
 const execFileAsync = promisify(execFile);
@@ -2739,7 +2746,16 @@ async function buildRuntime(input: {
     : agentCommand;
   // ACPX launches only argv arrays on Windows; keep POSIX command identities unchanged.
   const overrides = overrideCommand
-    ? { [acpxAgent]: process.platform === "win32" ? relayArgv ?? splitWindowsAgentCommand(overrideCommand) : overrideCommand }
+    ? {
+      [acpxAgent]: process.platform === "win32"
+        ? relayArgv ?? resolveWindowsAgentArgv({
+          command: overrideCommand,
+          // Only a path this engine resolved itself is passed through whole.
+          // A user-configured agentCommand stays a command line.
+          resolvedPath: !configuredCommand && builtInCommand?.resolvedPath === true,
+        })
+        : overrideCommand,
+    }
     : undefined;
   const agentRegistry = createAgentRegistry({ overrides });
   const loggedEnv = buildInvocationEnvForLogs(env, {
